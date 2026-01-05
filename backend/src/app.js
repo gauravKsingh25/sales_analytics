@@ -11,13 +11,20 @@ import logger from './logger.js';
 const app = express();
 
 app.use(helmet());
+
+// CORS configuration - MUST be before routes
 app.use(cors({ 
   origin: [
     'http://localhost:3000',
+    'https://sales-analytics-iota.vercel.app',
     'https://sales-analytics-frontend-68mk.onrender.com'
   ], 
   credentials: true 
 }));
+
+// Handle preflight requests explicitly
+app.options('*', cors());
+
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 app.use(compression());
