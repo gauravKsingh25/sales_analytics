@@ -369,4 +369,198 @@ router.get('/recent-vouchers', async (req, res) => {
   }
 });
 
+// Get detailed monthly insights
+router.get('/monthly-details', async (req, res) => {
+  try {
+    const { month, year } = req.query;
+    
+    console.log('📅 Monthly Details Request:', { month, year });
+    
+    if (!month || !year) {
+      return res.status(400).json({ message: 'Month and year are required' });
+    }
+
+    const monthNum = parseInt(month);
+    const yearNum = parseInt(year);
+
+    // Calculate date range for the month
+    const startDate = new Date(yearNum, monthNum - 1, 1);
+    const endDate = new Date(yearNum, monthNum, 0, 23, 59, 59, 999);
+
+    console.log('📅 Date Range:', { startDate, endDate });
+
+    // Get all vouchers for the month
+    const [monthVouchers, prevMonthVouchers] = await Promise.all([
+      Voucher.find({
+        date: { $gte: startDate, $lte: endDate }
+      }).lean(),
+      // Get previous month for comparison
+      Voucher.find({
+        date: {
+          $gte: new Date(yearNum, monthNum - 2, 1),
+          $lte: new Date(yearNum, monthNum - 1, 0, 23, 59, 59, 999)
+        }
+      }).lean()
+    ]);
+
+    console.log('📊 Vouchers Found:', {
+      currentMonth: monthVouchers.length,
+      previousMonth: prevMonthVouchers.length
+    });
+
+    // Calculate summary statistics
+    const totalAmount = monthVouchers.reduce((sum, v) => sum + (v.totalAmount || 0), 0);
+    const totalVouchers = monthVouchers.length;
+    const salesVouchers = monthVouchers.filter(v => 
+      v.rawOriginal?.Vch_Type?.toLowerCase().includes('sales')
+    );
+    const salesCount = salesVouchers.length;
+    const avgDealSize = totalVouchers > 0 ? totalAmount / totalVouchers : 0;
+
+    // Calculate growth from previous month
+    const prevMonthAmount = prevMonthVouchers.reduce((sum, v) => sum + (v.totalAmount || 0), 0);
+    const growth = prevMonthAmount > 0 
+      ? ((totalAmount - prevMonthAmount) / prevMonthAmount) * 100 
+      : null;
+
+    // Get unique active employees and companies
+    const voucherIds = monthVouchers.map(v => v._id);
+    const participants = await VoucherParticipant.find({
+      voucherId: { $in: voucherIds }
+    }).lean();
+
+    const activeEmployees = [...new Set(participants.map(p => p.employeeId?.toString()).filter(Boolean))].length;
+    const activeCompanies = [...new Set(monthVouchers.map(v => v.companyId?.toString()).filter(Boolean))].length;
+
+    console.log('📈 Summary Stats:', {
+      totalAmount,
+      totalVouchers,
+      salesCount,
+      activeEmployees,
+      activeCompanies
+    });
+
+    // Get top employees for the month
+    const topEmployees = await VoucherParticipant.aggregate([
+      {
+        $match: {
+          voucherId: { $in: voucherIds }
+        }
+      },
+      {
+        $lookup: {
+          from: 'vouchers',
+          localField: 'voucherId',
+          foreignField: '_id',
+          as: 'voucher'
+        }
+      },
+      { $unwind: '$voucher' },
+      {
+        $match: {
+          'voucher.rawOriginal.Vch_Type': { $regex: /sales/i }
+        }
+      },
+      {
+        $group: {
+          _id: '$employeeId',
+          totalSales: { $sum: '$voucher.totalAmount' },
+          voucherCount: { $sum: 1 }
+        }
+      },
+      {
+        $lookup: {
+          from: 'employees',
+          localField: '_id',
+          foreignField: '_id',
+          as: 'employee'
+        }
+      },
+      { $unwind: { path: '$employee', preserveNullAndEmptyArrays: true } },
+      {
+        $project: {
+          employeeName: '$employee.name',
+          employeeCode: '$employee.employeeCode',
+          totalSales: 1,
+          voucherCount: 1
+        }
+      },
+      { $sort: { totalSales: -1 } },
+      { $limit: 10 }
+    ]);
+
+    // Get top companies for the month
+    const topCompanies = await Voucher.aggregate([
+      {
+        $match: {
+          date: { $gte: startDate, $lte: endDate }
+        }
+      },
+      {
+        $group: {
+          _id: '$companyId',
+          totalAmount: { $sum: '$totalAmount' },
+          voucherCount: { $sum: 1 }
+        }
+      },
+      {
+        $lookup: {
+          from: 'companies',
+          localField: '_id',
+          foreignField: '_id',
+          as: 'company'
+        }
+      },
+      { $unwind: { path: '$company', preserveNullAndEmptyArrays: true } },
+      {
+        $project: {
+          companyName: '$company.name',
+          companyNormalized: '$company.normalized',
+          totalAmount: 1,
+          voucherCount: 1
+        }
+      },
+      { $sort: { totalAmount: -1 } },
+      { $limit: 10 }
+    ]);
+
+    // Get vouchers for the month (limited to recent 20)
+    const monthVouchersList = await Voucher.find({
+      date: { $gte: startDate, $lte: endDate }
+    })
+      .sort({ date: -1 })
+      .limit(20)
+      .populate('companyId')
+      .lean();
+
+    const responseData = {
+      summary: {
+        month: monthNum,
+        year: yearNum,
+        totalAmount,
+        totalVouchers,
+        salesVouchers: salesCount,
+        avgDealSize,
+        activeEmployees,
+        activeCompanies,
+        growth
+      },
+      topEmployees,
+      topCompanies,
+      vouchers: monthVouchersList
+    };
+
+    console.log('✅ Response Summary:', {
+      hasData: totalVouchers > 0,
+      topEmployeesCount: topEmployees.length,
+      topCompaniesCount: topCompanies.length
+    });
+
+    res.json(responseData);
+  } catch (error) {
+    console.error('❌ Error in monthly-details:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
 export default router;
