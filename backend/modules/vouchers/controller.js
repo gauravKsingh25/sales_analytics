@@ -5,10 +5,110 @@ import VoucherItem from '../../schemas/voucheritem.js';
 import VoucherParticipant from '../../schemas/voucherparticipant.js';
 import Employee from '../../schemas/employee.js';
 import Company from '../../schemas/company.js';
+import CreditNote from '../../schemas/creditnote.js';
 const router = express.Router();
 
+// GET all transactions (vouchers + credit notes) for a specific party
+export const getPartyTransactions = async (req, res) => {
+  try {
+    const { partyName } = req.params;
+    
+    if (!partyName) {
+      return res.status(400).json({ message: 'Party name is required' });
+    }
+
+    // Decode URL-encoded party name
+    const decodedPartyName = decodeURIComponent(partyName);
+    
+    // Escape special regex characters to prevent regex interpretation
+    const escapeRegex = (str) => str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const escapedPartyName = escapeRegex(decodedPartyName);
+
+    // Fetch all vouchers for this party using exact match (case-insensitive)
+    const vouchers = await Voucher.find({
+      'rawOriginal.Party': { $regex: new RegExp(`^${escapedPartyName}$`, 'i') }
+    })
+      .populate('companyId')
+      .lean();
+
+    // Fetch all credit notes for this party
+    const creditNotes = await CreditNote.find({
+      party: { $regex: new RegExp(`^${escapedPartyName}$`, 'i') }
+    }).lean();
+
+    // Combine and format transactions
+    const transactions = [];
+
+    // Add vouchers
+    vouchers.forEach(voucher => {
+      transactions.push({
+        _id: voucher._id,
+        type: 'voucher',
+        voucherType: voucher.rawOriginal?.Vch_Type || 'Unknown',
+        date: voucher.date,
+        voucherNumber: voucher.voucherNumber,
+        party: voucher.rawOriginal?.Party,
+        amount: voucher.totalAmount,
+        company: voucher.companyId?.name || 'Unknown',
+        isCancelled: false,
+        details: voucher.rawOriginal
+      });
+    });
+
+    // Add credit notes
+    creditNotes.forEach(cn => {
+      transactions.push({
+        _id: cn._id,
+        type: 'creditnote',
+        voucherType: 'Credit Note',
+        date: cn.date,
+        voucherNumber: cn.creditNoteNumber,
+        party: cn.party,
+        amount: -cn.creditAmount, // Negative for credit notes
+        isCancelled: cn.isCancelled,
+        details: cn.meta,
+        creditNoteDetails: cn.details
+      });
+    });
+
+    // Sort by date (newest first)
+    transactions.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    // Calculate totals - include ALL vouchers, not just sales
+    const totalVoucherAmount = vouchers.reduce((sum, v) => sum + (v.totalAmount || 0), 0);
+    
+    // Also calculate sales-specific total for reference
+    const totalSales = vouchers
+      .filter(v => v.rawOriginal?.Vch_Type?.toLowerCase().includes('sales'))
+      .reduce((sum, v) => sum + (v.totalAmount || 0), 0);
+    
+    const totalCreditNotes = creditNotes
+      .filter(cn => !cn.isCancelled)
+      .reduce((sum, cn) => sum + (cn.creditAmount || 0), 0);
+
+    const netAmount = totalVoucherAmount - totalCreditNotes;
+
+    res.json({
+      party: decodedPartyName,
+      transactions,
+      summary: {
+        totalTransactions: transactions.length,
+        totalVouchers: vouchers.length,
+        totalCreditNotes: creditNotes.length,
+        totalVoucherAmount,
+        totalSales,
+        totalCreditNotes,
+        netAmount
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching party transactions:', error);
+    res.status(500).json({ message: 'Failed to fetch party transactions', error: error.message });
+  }
+};
+
 // GET /vouchers with items and employee names (with pagination and filters)
-router.get('/', async (req, res) => {
+export const getAllVouchers = async (req, res) => {
   const { page = 1, limit = 25, voucherNumber, partyName, dateFrom, dateTo, companyId, minAmount, maxAmount, sortBy = 'date', sortOrder = 'desc' } = req.query;
   
   // Set cache headers for better performance
@@ -116,9 +216,9 @@ router.get('/', async (req, res) => {
       pages: Math.ceil(countResult / parseInt(limit))
     }
   });
-});
+};
 
-router.get('/:id', async (req, res) => {
+export const getVoucherById = async (req, res) => {
   const voucher = await Voucher.findById(req.params.id).lean();
   if (!voucher) return res.status(404).json({ message: 'Not found' });
   
@@ -142,17 +242,22 @@ router.get('/:id', async (req, res) => {
       confidence: p.confidence
     }))
   });
-});
+};
 
-// New endpoint to get items for a specific voucher (for expanding in list view)
-router.get('/:id/items', async (req, res) => {
-  const items = await VoucherItem.find({ voucherId: req.params.id }).lean();
-  res.json(items);
-});
-
-router.post('/:id/flag', async (req, res) => {
-  // For demo: just return ok
-  res.json({ message: 'Voucher flagged' });
-});
-
-export default router;
+export const getVoucherStats = async (req, res) => {
+  try {
+    const stats = await Voucher.aggregate([
+      {
+        $group: {
+          _id: null,
+          totalVouchers: { $sum: 1 },
+          totalAmount: { $sum: '$totalAmount' }
+        }
+      }
+    ]);
+    
+    res.json(stats[0] || { totalVouchers: 0, totalAmount: 0 });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to fetch stats', error: error.message });
+  }
+};

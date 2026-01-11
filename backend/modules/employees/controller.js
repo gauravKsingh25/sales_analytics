@@ -4,6 +4,7 @@ import Employee from '../../schemas/employee.js';
 import EmployeeCandidate from '../../schemas/employeecandidate.js';
 import Voucher from '../../schemas/voucher.js';
 import VoucherParticipant from '../../schemas/voucherparticipant.js';
+import CreditNote from '../../schemas/creditnote.js';
 
 const router = express.Router();
 
@@ -12,6 +13,82 @@ router.get('/', async (req, res) => {
     .populate('designation', 'title level')
     .populate('reportingTo', 'name employeeCode');
   res.json(employees);
+});
+
+// Get all parties grouped by staff
+router.get('/parties/by-staff', async (req, res) => {
+  try {
+    // Get all vouchers
+    const vouchers = await Voucher.find({}).lean();
+    
+    // Create a map: staffName -> Set of party names
+    const staffPartiesMap = new Map();
+
+    for (const voucher of vouchers) {
+      const party = voucher.rawOriginal?.Party;
+      const details = voucher.rawOriginal?.Details || [];
+
+      if (!party) continue; // Skip vouchers without party
+
+      // Find staff in details
+      const staffEntries = details.filter(d => d.Staff);
+
+      for (const entry of staffEntries) {
+        const staffName = entry.Staff.trim();
+        
+        if (!staffPartiesMap.has(staffName)) {
+          staffPartiesMap.set(staffName, {
+            parties: new Set(),
+            voucherCount: 0,
+            totalSales: 0
+          });
+        }
+        
+        const staffData = staffPartiesMap.get(staffName);
+        staffData.parties.add(party.trim());
+        staffData.voucherCount++;
+        
+        // Add sales amount if it's a sales voucher
+        const vchType = voucher.rawOriginal?.Vch_Type || '';
+        if (vchType.toLowerCase().includes('sales')) {
+          staffData.totalSales += voucher.totalAmount || 0;
+        }
+      }
+    }
+
+    // Convert to array format
+    const staffPartiesArray = [];
+    
+    for (const [staffName, data] of staffPartiesMap.entries()) {
+      const parties = Array.from(data.parties).sort();
+      
+      // Try to find matching employee
+      const normalized = staffName.toLowerCase().replace(/[^a-z0-9]/g, '');
+      const employee = await Employee.findOne({ normalized })
+        .populate('designation', 'title level')
+        .select('name employeeCode designation');
+      
+      staffPartiesArray.push({
+        staffName,
+        employee: employee || null,
+        partiesCount: parties.length,
+        parties,
+        voucherCount: data.voucherCount,
+        totalSales: data.totalSales
+      });
+    }
+
+    // Sort by total sales (descending)
+    staffPartiesArray.sort((a, b) => b.totalSales - a.totalSales);
+
+    res.json({
+      count: staffPartiesArray.length,
+      data: staffPartiesArray
+    });
+  } catch (error) {
+    console.error('Error fetching parties by staff:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
 });
 
 router.get('/:id', async (req, res) => {
@@ -47,13 +124,56 @@ router.get('/:id/details', async (req, res) => {
     let totalSales = 0;
     const salesVouchers = [];
     
+    // Also collect unique parties this employee is responsible for
+    const responsiblePartiesSet = new Set();
+    
     vouchers.forEach(voucher => {
       const vchType = voucher.rawOriginal?.Vch_Type || '';
+      const party = voucher.rawOriginal?.Party;
+      
+      // Add party to responsible parties if exists
+      if (party) {
+        responsiblePartiesSet.add(party.trim());
+      }
+      
       if (vchType.toLowerCase().includes('sales')) {
         totalSales += voucher.totalAmount || 0;
         salesVouchers.push(voucher);
       }
     });
+    
+    // Convert to sorted array
+    const responsibleParties = Array.from(responsiblePartiesSet).sort();
+
+    // Get credit notes for this employee's responsible parties
+    let totalCreditNotes = 0;
+    let creditNotesCount = 0;
+    
+    if (responsibleParties.length > 0) {
+      const creditNoteStats = await CreditNote.aggregate([
+        {
+          $match: {
+            isCancelled: false,
+            party: { $in: responsibleParties }
+          }
+        },
+        {
+          $group: {
+            _id: null,
+            totalCredit: { $sum: '$creditAmount' },
+            count: { $sum: 1 }
+          }
+        }
+      ]);
+      
+      if (creditNoteStats.length > 0) {
+        totalCreditNotes = creditNoteStats[0].totalCredit || 0;
+        creditNotesCount = creditNoteStats[0].count || 0;
+      }
+    }
+    
+    // Calculate net sales (sales - credit notes)
+    const netSales = totalSales - totalCreditNotes;
 
     // Get subordinates' sales and vouchers
     let subordinatesTotalSales = 0;
@@ -98,11 +218,19 @@ router.get('/:id/details', async (req, res) => {
     res.json({
       employee: emp,
       totalSales,
+      totalCreditNotes,
+      creditNotesCount,
+      netSales,
       salesVouchers,
       allVouchers: vouchers,
+      responsibleParties, // Array of party names this employee handles
       stats: {
         totalVouchers: vouchers.length,
-        salesVouchersCount: salesVouchers.length
+        salesVouchersCount: salesVouchers.length,
+        partiesCount: responsibleParties.length,
+        creditNotesCount,
+        totalCreditNotes,
+        netSales
       },
       subordinates: subordinatesWithSales,
       subordinatesTotalSales,

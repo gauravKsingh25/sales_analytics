@@ -6,11 +6,12 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { useVouchers, useVoucherItems } from '../../lib/api';
+import { useVouchers, useVoucherItems, useCreditNotes } from '../../lib/api';
 import { useState } from 'react';
 import { Loader2, ChevronDown, ChevronUp, FileText, ChevronLeft, ChevronRight, Filter, X, Search, ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react';
+import PartyTransactionModal from '@/components/PartyTransactionModal';
 
-function VoucherDetails({ voucherId, employees, voucher }) {
+function VoucherDetails({ voucherId, employees, voucher, onPartyClick }) {
   const { data, isLoading } = useVoucherItems(voucherId);
   const [employeeSearch, setEmployeeSearch] = useState('');
 
@@ -45,7 +46,12 @@ function VoucherDetails({ voucherId, employees, voucher }) {
         </div>
         <div>
           <p className="text-xs text-muted-foreground">Party</p>
-          <p className="font-medium">{rawOriginal?.Party || 'N/A'}</p>
+          <button
+            onClick={() => rawOriginal?.Party && onPartyClick(rawOriginal.Party)}
+            className="font-medium text-blue-600 hover:text-blue-800 hover:underline cursor-pointer text-left"
+          >
+            {rawOriginal?.Party || 'N/A'}
+          </button>
         </div>
         <div>
           <p className="text-xs text-muted-foreground">Debit Amount</p>
@@ -154,7 +160,100 @@ function VoucherDetails({ voucherId, employees, voucher }) {
   );
 }
 
+function CreditNoteDetails({ creditNote, onPartyClick }) {
+  return (
+    <div className="p-4 space-y-4">
+      {/* Basic Credit Note Info */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 p-4 bg-red-50 rounded-lg border border-red-200">
+        <div>
+          <p className="text-xs text-muted-foreground">Credit Note #</p>
+          <p className="font-medium">{creditNote?.creditNoteNumber || 'N/A'}</p>
+        </div>
+        <div>
+          <p className="text-xs text-muted-foreground">Party</p>
+          <button
+            onClick={() => creditNote?.party && onPartyClick(creditNote.party)}
+            className="font-medium text-blue-600 hover:text-blue-800 hover:underline cursor-pointer text-left"
+          >
+            {creditNote?.party || 'N/A'}
+          </button>
+        </div>
+        <div>
+          <p className="text-xs text-muted-foreground">Credit Amount</p>
+          <p className="font-medium text-red-600">₹{creditNote?.creditAmount?.toLocaleString('en-IN') || '0'}</p>
+        </div>
+        <div>
+          <p className="text-xs text-muted-foreground">Status</p>
+          {creditNote?.isCancelled ? (
+            <Badge variant="destructive">Cancelled</Badge>
+          ) : (
+            <Badge className="bg-green-600">Active</Badge>
+          )}
+        </div>
+      </div>
+
+      {/* Credit Note Details */}
+      {creditNote?.details && creditNote.details.length > 0 && (
+        <div>
+          <h4 className="font-semibold mb-3 text-sm flex items-center gap-2">
+            <FileText className="h-4 w-4" />
+            Credit Note Items:
+          </h4>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Description</TableHead>
+                <TableHead className="text-right">Quantity</TableHead>
+                <TableHead className="text-right">Rate (₹)</TableHead>
+                <TableHead className="text-right">Amount (₹)</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {creditNote.details.map((item, idx) => (
+                <TableRow key={idx}>
+                  <TableCell className="font-medium">{item.description || 'N/A'}</TableCell>
+                  <TableCell className="text-right">{item.quantity || '-'}</TableCell>
+                  <TableCell className="text-right">{item.rate?.toLocaleString('en-IN') || '-'}</TableCell>
+                  <TableCell className="text-right font-medium">
+                    {item.amount?.toLocaleString('en-IN') || '0'}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+
+      {/* Metadata */}
+      {creditNote?.meta && (
+        <div className="grid grid-cols-2 gap-4 p-3 bg-muted/30 rounded-lg">
+          {creditNote.meta.enteredBy && (
+            <div>
+              <p className="text-xs text-muted-foreground">Entered By</p>
+              <p className="font-medium">{creditNote.meta.enteredBy}</p>
+            </div>
+          )}
+          {creditNote.meta.grnNo && (
+            <div>
+              <p className="text-xs text-muted-foreground">GRN No</p>
+              <p className="font-medium">{creditNote.meta.grnNo}</p>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* No data message */}
+      {(!creditNote?.details || creditNote.details.length === 0) && !creditNote?.meta && (
+        <p className="text-sm text-muted-foreground text-center py-4">
+          No additional details available for this credit note
+        </p>
+      )}
+    </div>
+  );
+}
+
 export default function VouchersPage() {
+  const [activeTab, setActiveTab] = useState('vouchers'); // 'vouchers' or 'creditnotes'
   const [page, setPage] = useState(1);
   const [filters, setFilters] = useState({
     voucherNumber: '',
@@ -168,9 +267,16 @@ export default function VouchersPage() {
   const [sortOrder, setSortOrder] = useState('desc');
   const [showFilters, setShowFilters] = useState(false);
   const [expanded, setExpanded] = useState(null);
+  const [selectedParty, setSelectedParty] = useState(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
 
-  // Build query params
-  const queryParams = {
+  const handlePartyClick = (partyName) => {
+    setSelectedParty(partyName);
+    setIsModalOpen(true);
+  };
+
+  // Build query params for vouchers
+  const voucherQueryParams = {
     page,
     limit: 25,
     sortBy,
@@ -178,7 +284,23 @@ export default function VouchersPage() {
     ...Object.fromEntries(Object.entries(filters).filter(([, v]) => v !== ''))
   };
 
-  const { data, isLoading, isError, error } = useVouchers(queryParams);
+  // Build query params for credit notes - only include non-empty values
+  const creditNoteQueryParams = {
+    skip: (page - 1) * 25,
+    limit: 25,
+    sortBy,
+    sortOrder,
+    ...(filters.partyName && { party: filters.partyName }),
+    ...(filters.dateFrom && { startDate: filters.dateFrom }),
+    ...(filters.dateTo && { endDate: filters.dateTo }),
+  };
+
+  // Fetch data based on active tab
+  const vouchersQuery = useVouchers(activeTab === 'vouchers' ? voucherQueryParams : {});
+  const creditNotesQuery = useCreditNotes(activeTab === 'creditnotes' ? creditNoteQueryParams : {});
+
+  // Use the appropriate query based on active tab
+  const { data, isLoading, isError, error } = activeTab === 'vouchers' ? vouchersQuery : creditNotesQuery;
 
   const handleFilterChange = (key, value) => {
     setFilters(prev => ({ ...prev, [key]: value }));
@@ -213,16 +335,33 @@ export default function VouchersPage() {
     return sortOrder === 'asc' ? <ArrowUp className="h-4 w-4" /> : <ArrowDown className="h-4 w-4" />;
   };
 
-  const vouchers = data?.data || [];
-  const pagination = data?.pagination || { total: 0, page: 1, pages: 1 };
+  // Handle different data structures for vouchers and credit notes
+  const items = activeTab === 'vouchers' 
+    ? (data?.data || [])
+    : (data?.data || []);
+  
+  const pagination = activeTab === 'vouchers'
+    ? (data?.pagination || { total: 0, page: 1, pages: 1 })
+    : {
+        total: data?.total || 0,
+        page,
+        pages: Math.ceil((data?.total || 0) / 25)
+      };
+
+  // Reset to page 1 when switching tabs
+  const handleTabChange = (tab) => {
+    setActiveTab(tab);
+    setPage(1);
+    setExpanded(null);
+  };
 
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="max-w-7xl mx-auto py-8 px-4 space-y-6">
         <div className="flex items-center justify-between animate-fadeIn">
           <div>
-            <h1 className="text-3xl font-bold text-gray-900">Vouchers Management</h1>
-            <p className="text-gray-600 mt-1">Browse and manage all vouchers in the system</p>
+            <h1 className="text-3xl font-bold text-gray-900">Vouchers & Credit Notes</h1>
+            <p className="text-gray-600 mt-1">Browse and manage all vouchers and credit notes in the system</p>
           </div>
           <Button
             variant={showFilters ? "default" : "outline"}
@@ -234,6 +373,32 @@ export default function VouchersPage() {
           </Button>
         </div>
 
+        {/* Tabs */}
+        <div className="flex gap-2 border-b border-gray-200 animate-fadeIn">
+          <Button
+            variant={activeTab === 'vouchers' ? 'default' : 'ghost'}
+            onClick={() => handleTabChange('vouchers')}
+            className={activeTab === 'vouchers' 
+              ? 'bg-blue-600 hover:bg-blue-700 text-white rounded-b-none border-b-2 border-blue-600' 
+              : 'text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded-b-none'
+            }
+          >
+            <FileText className="h-4 w-4 mr-2" />
+            Sales Vouchers
+          </Button>
+          <Button
+            variant={activeTab === 'creditnotes' ? 'default' : 'ghost'}
+            onClick={() => handleTabChange('creditnotes')}
+            className={activeTab === 'creditnotes' 
+              ? 'bg-red-600 hover:bg-red-700 text-white rounded-b-none border-b-2 border-red-600' 
+              : 'text-gray-600 hover:text-red-600 hover:bg-red-50 rounded-b-none'
+            }
+          >
+            <FileText className="h-4 w-4 mr-2" />
+            Credit Notes
+          </Button>
+        </div>
+
       {showFilters && (
         <Card className="animate-slideInRight hover-lift bg-white">
           <CardHeader>
@@ -242,7 +407,7 @@ export default function VouchersPage() {
                 <div className="p-2 rounded-lg bg-blue-50">
                   <Search className="h-4 w-4 text-blue-600" />
                 </div>
-                Filter Vouchers
+                Filter {activeTab === 'vouchers' ? 'Vouchers' : 'Credit Notes'}
               </CardTitle>
               <Button variant="ghost" size="sm" onClick={clearFilters} className="hover:bg-red-50 hover:text-red-600 transition-colors">
                 <X className="h-4 w-4 mr-2" />
@@ -252,15 +417,17 @@ export default function VouchersPage() {
           </CardHeader>
           <CardContent>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="voucherNumber">Voucher Number</Label>
-                <Input
-                  id="voucherNumber"
-                  placeholder="Search by number..."
-                  value={filters.voucherNumber}
-                  onChange={(e) => handleFilterChange('voucherNumber', e.target.value)}
-                />
-              </div>
+              {activeTab === 'vouchers' && (
+                <div className="space-y-2">
+                  <Label htmlFor="voucherNumber">Voucher Number</Label>
+                  <Input
+                    id="voucherNumber"
+                    placeholder="Search by number..."
+                    value={filters.voucherNumber}
+                    onChange={(e) => handleFilterChange('voucherNumber', e.target.value)}
+                  />
+                </div>
+              )}
               <div className="space-y-2">
                 <Label htmlFor="partyName">Party Name</Label>
                 <Input
@@ -288,26 +455,30 @@ export default function VouchersPage() {
                   onChange={(e) => handleFilterChange('dateTo', e.target.value)}
                 />
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="minAmount">Min Amount</Label>
-                <Input
-                  id="minAmount"
-                  type="number"
-                  placeholder="0"
-                  value={filters.minAmount}
-                  onChange={(e) => handleFilterChange('minAmount', e.target.value)}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="maxAmount">Max Amount</Label>
-                <Input
-                  id="maxAmount"
-                  type="number"
-                  placeholder="100000"
-                  value={filters.maxAmount}
-                  onChange={(e) => handleFilterChange('maxAmount', e.target.value)}
-                />
-              </div>
+              {activeTab === 'vouchers' && (
+                <>
+                  <div className="space-y-2">
+                    <Label htmlFor="minAmount">Min Amount</Label>
+                    <Input
+                      id="minAmount"
+                      type="number"
+                      placeholder="0"
+                      value={filters.minAmount}
+                      onChange={(e) => handleFilterChange('minAmount', e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="maxAmount">Max Amount</Label>
+                    <Input
+                      id="maxAmount"
+                      type="number"
+                      placeholder="100000"
+                      value={filters.maxAmount}
+                      onChange={(e) => handleFilterChange('maxAmount', e.target.value)}
+                    />
+                  </div>
+                </>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -333,101 +504,191 @@ export default function VouchersPage() {
           <Card className="hover-lift animate-fadeIn bg-white">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <div className="p-2 rounded-lg bg-blue-50">
-                  <FileText className="h-5 w-5 text-blue-600" />
+                <div className={`p-2 rounded-lg ${activeTab === 'vouchers' ? 'bg-blue-50' : 'bg-red-50'}`}>
+                  <FileText className={`h-5 w-5 ${activeTab === 'vouchers' ? 'text-blue-600' : 'text-red-600'}`} />
                 </div>
-                All Vouchers
+                All {activeTab === 'vouchers' ? 'Vouchers' : 'Credit Notes'}
               </CardTitle>
               <CardDescription className="flex items-center gap-2">
-                <Badge className="bg-blue-600 text-white">{pagination.total}</Badge>
-                total vouchers • Page <Badge variant="outline">{pagination.page}</Badge> of <Badge variant="outline">{pagination.pages}</Badge>
+                <Badge className={activeTab === 'vouchers' ? 'bg-blue-600 text-white' : 'bg-red-600 text-white'}>{pagination.total}</Badge>
+                total {activeTab === 'vouchers' ? 'vouchers' : 'credit notes'} • Page <Badge variant="outline">{pagination.page}</Badge> of <Badge variant="outline">{pagination.pages}</Badge>
               </CardDescription>
             </CardHeader>
             <CardContent>
               <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow className="bg-gray-50">
-                    <TableHead>
-                      <Button variant="ghost" size="sm" onClick={() => handleSort('voucherNumber')} className="-ml-3">
-                        Voucher # {getSortIcon('voucherNumber')}
-                      </Button>
-                    </TableHead>
-                    <TableHead>
-                      <Button variant="ghost" size="sm" onClick={() => handleSort('date')} className="-ml-3">
-                        Date {getSortIcon('date')}
-                      </Button>
-                    </TableHead>
-                    <TableHead className="text-right">
-                      <Button variant="ghost" size="sm" onClick={() => handleSort('totalAmount')} className="-mr-3">
-                        Amount {getSortIcon('totalAmount')}
-                      </Button>
-                    </TableHead>
-                    <TableHead>Currency</TableHead>
-                    <TableHead>Employees</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {vouchers.length > 0 ? (
-                    vouchers.map(row => (
-                      <>
-                        <TableRow key={row._id}>
-                          <TableCell className="font-medium">{row.voucherNumber}</TableCell>
-                          <TableCell>{new Date(row.date).toLocaleDateString()}</TableCell>
-                          <TableCell className="text-right">{row.totalAmount?.toLocaleString()}</TableCell>
-                          <TableCell>
-                            <Badge variant="outline">{row.currency || 'N/A'}</Badge>
-                          </TableCell>
-                          <TableCell>
-                            <div className="flex flex-wrap gap-1">
-                              {row.employees?.slice(0, 2).map((e, idx) => (
-                                <Badge key={idx} variant="secondary">{e.name}</Badge>
-                              ))}
-                              {row.employees?.length > 2 && (
-                                <Badge variant="secondary">+{row.employees.length - 2}</Badge>
-                              )}
-                            </div>
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => setExpanded(expanded === row._id ? null : row._id)}
-                              className="hover:bg-blue-100 hover:text-blue-700 transition-all duration-300"
-                            >
-                              {expanded === row._id ? (
-                                <>
-                                  <ChevronUp className="h-4 w-4 mr-1" />
-                                  Hide
-                                </>
-                              ) : (
-                                <>
-                                  <ChevronDown className="h-4 w-4 mr-1" />
-                                  Details
-                                </>
-                              )}
-                            </Button>
-                          </TableCell>
-                        </TableRow>
-                        {expanded === row._id && (
-                          <TableRow className="animate-fadeIn">
-                            <TableCell colSpan={6} className="bg-blue-50 border-l-4 border-l-blue-500">
-                              <VoucherDetails voucherId={row._id} employees={row.employees} voucher={row} />
+                {activeTab === 'vouchers' ? (
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="bg-gray-50">
+                      <TableHead>
+                        <Button variant="ghost" size="sm" onClick={() => handleSort('voucherNumber')} className="-ml-3">
+                          Voucher # {getSortIcon('voucherNumber')}
+                        </Button>
+                      </TableHead>
+                      <TableHead>
+                        <Button variant="ghost" size="sm" onClick={() => handleSort('date')} className="-ml-3">
+                          Date {getSortIcon('date')}
+                        </Button>
+                      </TableHead>
+                      <TableHead className="text-right">
+                        <Button variant="ghost" size="sm" onClick={() => handleSort('totalAmount')} className="-mr-3">
+                          Amount {getSortIcon('totalAmount')}
+                        </Button>
+                      </TableHead>
+                      <TableHead>Currency</TableHead>
+                      <TableHead>Employees</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {items.length > 0 ? (
+                      items.map(row => (
+                        <>
+                          <TableRow key={row._id}>
+                            <TableCell className="font-medium">{row.voucherNumber}</TableCell>
+                            <TableCell>{new Date(row.date).toLocaleDateString()}</TableCell>
+                            <TableCell className="text-right">{row.totalAmount?.toLocaleString()}</TableCell>
+                            <TableCell>
+                              <Badge variant="outline">{row.currency || 'N/A'}</Badge>
+                            </TableCell>
+                            <TableCell>
+                              <div className="flex flex-wrap gap-1">
+                                {row.employees?.slice(0, 2).map((e, idx) => (
+                                  <Badge key={idx} variant="secondary">{e.name}</Badge>
+                                ))}
+                                {row.employees?.length > 2 && (
+                                  <Badge variant="secondary">+{row.employees.length - 2}</Badge>
+                                )}
+                              </div>
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => setExpanded(expanded === row._id ? null : row._id)}
+                                className="hover:bg-blue-100 hover:text-blue-700 transition-all duration-300"
+                              >
+                                {expanded === row._id ? (
+                                  <>
+                                    <ChevronUp className="h-4 w-4 mr-1" />
+                                    Hide
+                                  </>
+                                ) : (
+                                  <>
+                                    <ChevronDown className="h-4 w-4 mr-1" />
+                                    Details
+                                  </>
+                                )}
+                              </Button>
                             </TableCell>
                           </TableRow>
-                        )}
-                      </>
-                    ))
-                  ) : (
-                    <TableRow>
-                      <TableCell colSpan={6} className="text-center text-muted-foreground py-12">
-                        No vouchers found
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
+                          {expanded === row._id && (
+                            <TableRow className="animate-fadeIn">
+                              <TableCell colSpan={6} className="bg-blue-50 border-l-4 border-l-blue-500">
+                                <VoucherDetails voucherId={row._id} employees={row.employees} voucher={row} onPartyClick={handlePartyClick} />
+                              </TableCell>
+                            </TableRow>
+                          )}
+                        </>
+                      ))
+                    ) : (
+                      <TableRow>
+                        <TableCell colSpan={6} className="text-center text-muted-foreground py-12">
+                          No vouchers found
+                        </TableCell>
+                      </TableRow>
+                    )}
+                  </TableBody>
+                </Table>
+                ) : (
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="bg-gray-50">
+                        <TableHead>
+                          <Button variant="ghost" size="sm" onClick={() => handleSort('creditNoteNumber')} className="-ml-3">
+                            Credit Note # {getSortIcon('creditNoteNumber')}
+                          </Button>
+                        </TableHead>
+                        <TableHead>
+                          <Button variant="ghost" size="sm" onClick={() => handleSort('date')} className="-ml-3">
+                            Date {getSortIcon('date')}
+                          </Button>
+                        </TableHead>
+                        <TableHead>Party</TableHead>
+                        <TableHead className="text-right">
+                          <Button variant="ghost" size="sm" onClick={() => handleSort('creditAmount')} className="-mr-3">
+                            Credit Amount {getSortIcon('creditAmount')}
+                          </Button>
+                        </TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead className="text-right">Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {items.length > 0 ? (
+                        items.map(row => (
+                          <>
+                            <TableRow key={row._id}>
+                              <TableCell className="font-medium">{row.creditNoteNumber}</TableCell>
+                              <TableCell>{new Date(row.date).toLocaleDateString()}</TableCell>
+                              <TableCell>
+                                <button
+                                  onClick={() => row.party && handlePartyClick(row.party)}
+                                  className="font-medium text-blue-600 hover:text-blue-800 hover:underline cursor-pointer"
+                                >
+                                  {row.party || 'N/A'}
+                                </button>
+                              </TableCell>
+                              <TableCell className="text-right text-red-600 font-semibold">
+                                ₹{row.creditAmount?.toLocaleString('en-IN')}
+                              </TableCell>
+                              <TableCell>
+                                {row.isCancelled ? (
+                                  <Badge variant="destructive">Cancelled</Badge>
+                                ) : (
+                                  <Badge className="bg-green-600">Active</Badge>
+                                )}
+                              </TableCell>
+                              <TableCell className="text-right">
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => setExpanded(expanded === row._id ? null : row._id)}
+                                  className="hover:bg-red-100 hover:text-red-700 transition-all duration-300"
+                                >
+                                  {expanded === row._id ? (
+                                    <>
+                                      <ChevronUp className="h-4 w-4 mr-1" />
+                                      Hide
+                                    </>
+                                  ) : (
+                                    <>
+                                      <ChevronDown className="h-4 w-4 mr-1" />
+                                      Details
+                                    </>
+                                  )}
+                                </Button>
+                              </TableCell>
+                            </TableRow>
+                            {expanded === row._id && (
+                              <TableRow className="animate-fadeIn">
+                                <TableCell colSpan={6} className="bg-red-50 border-l-4 border-l-red-500">
+                                  <CreditNoteDetails creditNote={row} onPartyClick={handlePartyClick} />
+                                </TableCell>
+                              </TableRow>
+                            )}
+                          </>
+                        ))
+                      ) : (
+                        <TableRow>
+                          <TableCell colSpan={6} className="text-center text-muted-foreground py-12">
+                            No credit notes found
+                          </TableCell>
+                        </TableRow>
+                      )}
+                    </TableBody>
+                  </Table>
+                )}
               </div>
             </CardContent>
           </Card>
@@ -447,7 +708,7 @@ export default function VouchersPage() {
                     Previous
                   </Button>
                   <div className="flex items-center gap-2">
-                    <Badge className="bg-blue-600 text-white">Page {page}</Badge>
+                    <Badge className={activeTab === 'vouchers' ? 'bg-blue-600 text-white' : 'bg-red-600 text-white'}>Page {page}</Badge>
                     <span className="text-gray-600">of</span>
                     <Badge variant="outline">{pagination.pages}</Badge>
                   </div>
@@ -466,6 +727,13 @@ export default function VouchersPage() {
           )}
         </>
       )}
+
+      {/* Party Transaction Modal */}
+      <PartyTransactionModal
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        partyName={selectedParty}
+      />
     </div>
     </div>
   );

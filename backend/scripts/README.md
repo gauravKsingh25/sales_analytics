@@ -4,6 +4,120 @@ This directory contains utility scripts for data manipulation and maintenance.
 
 ## Available Scripts
 
+### `seed-credit-notes.js`
+
+**NEW** - Seeds credit notes from JSON files into MongoDB.
+
+#### Purpose
+
+Imports credit note data from the `uploads/credit notes/` folder into a dedicated `creditnotes` collection in MongoDB.
+
+#### Features
+
+- Reads all credit note JSON files from `uploads/credit notes/` folder
+- Handles both active and cancelled credit notes
+- Deduplication using hash-based system
+- Preserves complete original JSON in `rawOriginal` field
+- Extracts and indexes key fields (party, date, GRN, etc.)
+- Provides detailed statistics and top parties report
+
+#### Usage
+
+```bash
+cd backend
+node scripts/seed-credit-notes.js
+```
+
+#### What it Does
+
+1. Reads all `.json` files from `backend/uploads/credit notes/` folder
+2. For each credit note:
+   - Generates deduplication hash
+   - Parses date (ISO or Excel serial)
+   - Extracts details (staff and account entries)
+   - Stores metadata (Entered By, GRN No)
+   - Preserves original JSON
+3. Prevents duplicates automatically
+4. Shows statistics:
+   - Total/Active/Cancelled counts
+   - Total credit amount
+   - Top 10 parties by credit amount
+
+#### Database Schema
+
+```javascript
+{
+  creditNoteNumber: String,
+  originalSalesVoucherNumber: String,
+  date: Date,
+  party: String,
+  isCancelled: Boolean,
+  creditAmount: Number,
+  details: [{ staff, account, amount }],
+  meta: { enteredBy, grnNo, source },
+  rawOriginal: Object
+}
+```
+
+#### Example Output
+
+```
+📊 Summary:
+Total credit notes found:  920
+✓ Successfully inserted:   920
+⊘ Duplicates skipped:      0
+
+📈 Database Statistics:
+Total credit notes in DB:  920
+Active credit notes:       917
+Cancelled credit notes:    3
+Total credit amount:       ₹2,450,000.00
+
+🏢 Top 10 Parties by Credit Amount:
+1. 99MCG DOT COM
+   Credit: ₹245,000.00 (15 notes)
+```
+
+---
+
+### `aggregate-staff-parties.js`
+
+**NEW** - Aggregates parties by staff from vouchers and updates employee records.
+
+#### Purpose
+
+Creates a mapping of which parties (customers) each staff member is responsible for based on their voucher history.
+
+#### Features
+
+- Scans all vouchers and extracts party-staff relationships
+- Counts unique parties per staff member
+- Calculates total sales per staff
+- Updates employee metadata with responsible parties list
+- Matches staff names from vouchers to employee records
+
+#### Usage
+
+```bash
+cd backend
+node scripts/aggregate-staff-parties.js
+```
+
+#### Output
+
+- Console output showing staff-party mapping
+- Updates `Employee.metadata.responsibleParties` with array of party names
+- Updates `Employee.metadata.partiesCount` with count
+
+#### API Endpoints
+
+After running this script, the following endpoints provide party data:
+
+- `GET /api/employees/:id/details` - Includes `responsibleParties` array
+- `GET /api/employees/parties/by-staff` - All staff with their parties
+
+---
+
 ### `seed-vouchers.js`
 
 Seeds MongoDB database with voucher data from JSON files in the uploads/ folder.

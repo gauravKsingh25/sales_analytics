@@ -22,8 +22,9 @@ import {
   MapPin
 } from 'lucide-react';
 
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000/api';
+
 export default function TargetsPage() {
-  const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000/api';
   const queryClient = useQueryClient();
 
   const [isCreateOpen, setIsCreateOpen] = useState(false);

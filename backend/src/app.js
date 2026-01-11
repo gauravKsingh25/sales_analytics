@@ -13,12 +13,14 @@ const app = express();
 app.use(helmet());
 
 // CORS configuration - MUST be before routes
+const allowedOrigins = [
+  process.env.FRONTEND_URL || 'http://localhost:3000',
+  'https://sales-analytics-iota.vercel.app',
+  'https://sales-analytics-frontend-68mk.onrender.com'
+];
+
 app.use(cors({ 
-  origin: [
-    'http://localhost:3000',
-    'https://sales-analytics-iota.vercel.app',
-    'https://sales-analytics-frontend-68mk.onrender.com'
-  ], 
+  origin: allowedOrigins, 
   credentials: true 
 }));
 

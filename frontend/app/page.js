@@ -30,14 +30,23 @@ import {
   AlertTriangle
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
+import PartyTransactionModal from '@/components/PartyTransactionModal';
+
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000/api';
 
 export default function DashboardPage() {
-  const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000/api';
   const router = useRouter();
   
   // State for modal
   const [selectedMonth, setSelectedMonth] = useState(null);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [selectedParty, setSelectedParty] = useState(null);
+  const [isPartyModalOpen, setIsPartyModalOpen] = useState(false);
+
+  const handlePartyClick = (partyName) => {
+    setSelectedParty(partyName);
+    setIsPartyModalOpen(true);
+  };
 
   const { data: stats, isLoading: loadingStats } = useQuery({
     queryKey: ['dashboard-stats'],
@@ -115,6 +124,22 @@ export default function DashboardPage() {
       subtitle: `${stats?.salesCount || 0} sales vouchers`,
       icon: DollarSign, 
       color: "text-green-600",
+      loading: loadingStats
+    },
+    { 
+      title: "Credit Notes", 
+      value: formatCurrency(stats?.totalCreditAmount || 0), 
+      subtitle: `${stats?.creditNotesCount || 0} credit notes`,
+      icon: AlertTriangle, 
+      color: "text-red-600",
+      loading: loadingStats
+    },
+    { 
+      title: "Net Revenue", 
+      value: formatCurrency(stats?.netRevenue || 0), 
+      subtitle: `Sales - Credit Notes`,
+      icon: TrendingUp, 
+      color: "text-emerald-600",
       loading: loadingStats
     },
     { 
@@ -647,6 +672,13 @@ export default function DashboardPage() {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* Party Transaction Modal */}
+      <PartyTransactionModal
+        isOpen={isPartyModalOpen}
+        onClose={() => setIsPartyModalOpen(false)}
+        partyName={selectedParty}
+      />
     </div>
     </div>
   );

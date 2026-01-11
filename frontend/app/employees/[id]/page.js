@@ -1,22 +1,41 @@
 "use client";
 
+import { useState, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Loader2, ArrowLeft, TrendingUp, Receipt, Users } from 'lucide-react';
-
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Loader2, ArrowLeft, TrendingUp, Receipt, Users, Search, Filter, X } from 'lucide-react';
+import PartyTransactionModal from '@/components/PartyTransactionModal';
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000/api';
 export default function EmployeeDetailPage() {
   const params = useParams();
   const router = useRouter();
   const employeeId = params.id;
 
+  const [selectedParty, setSelectedParty] = useState(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  
+  // Filter states
+  const [showFilters, setShowFilters] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [voucherTypeFilter, setVoucherTypeFilter] = useState('');
+  const [partyFilter, setPartyFilter] = useState('');
+  const [dateFrom, setDateFrom] = useState('');
+  const [dateTo, setDateTo] = useState('');
+
+  const handlePartyClick = (partyName) => {
+    setSelectedParty(partyName);
+    setIsModalOpen(true);
+  };
+
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['employee-details', employeeId],
     queryFn: async () => {
-      const API_BASE = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:4000/api';
       const res = await fetch(`${API_BASE}/employees/${employeeId}/details`);
       if (!res.ok) throw new Error('Failed to fetch employee details');
       return res.json();
@@ -24,6 +43,84 @@ export default function EmployeeDetailPage() {
     enabled: !!employeeId
   });
 
+  const { employee, totalSales, totalCreditNotes, netSales, allVouchers, stats, subordinates, subordinatesTotalSales, teamSales, subordinatesVouchers, responsibleParties } = data || {};
+
+  // Filter and search vouchers - MUST be before conditional returns
+  const filteredVouchers = useMemo(() => {
+    if (!allVouchers) return [];
+    
+    return allVouchers.filter(voucher => {
+      const voucherNumber = voucher.voucherNumber?.toLowerCase() || '';
+      const vchType = voucher.rawOriginal?.Vch_Type?.toLowerCase() || '';
+      const party = voucher.rawOriginal?.Party?.toLowerCase() || '';
+      const company = (voucher.companyId?.name || voucher.companyId?.normalized || '').toLowerCase();
+      const search = searchQuery.toLowerCase();
+      
+      // Search filter
+      if (searchQuery && !(
+        voucherNumber.includes(search) ||
+        vchType.includes(search) ||
+        party.includes(search) ||
+        company.includes(search)
+      )) {
+        return false;
+      }
+      
+      // Voucher type filter
+      if (voucherTypeFilter && !vchType.includes(voucherTypeFilter.toLowerCase())) {
+        return false;
+      }
+      
+      // Party filter
+      if (partyFilter && !party.includes(partyFilter.toLowerCase())) {
+        return false;
+      }
+      
+      // Date range filter
+      if (dateFrom) {
+        const voucherDate = new Date(voucher.date);
+        const fromDate = new Date(dateFrom);
+        if (voucherDate < fromDate) return false;
+      }
+      
+      if (dateTo) {
+        const voucherDate = new Date(voucher.date);
+        const toDate = new Date(dateTo);
+        toDate.setHours(23, 59, 59, 999); // End of day
+        if (voucherDate > toDate) return false;
+      }
+      
+      return true;
+    });
+  }, [allVouchers, searchQuery, voucherTypeFilter, partyFilter, dateFrom, dateTo]);
+
+  const clearFilters = () => {
+    setSearchQuery('');
+    setVoucherTypeFilter('');
+    setPartyFilter('');
+    setDateFrom('');
+    setDateTo('');
+  };
+
+  const hasActiveFilters = searchQuery || voucherTypeFilter || partyFilter || dateFrom || dateTo;
+
+  const formatCurrency = (amount) => {
+    return new Intl.NumberFormat('en-IN', {
+      style: 'currency',
+      currency: 'INR',
+      minimumFractionDigits: 2
+    }).format(amount || 0);
+  };
+
+  const formatDate = (dateString) => {
+    return new Date(dateString).toLocaleDateString('en-IN', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric'
+    });
+  };
+
+  // Conditional returns AFTER all hooks
   if (isLoading) {
     return (
       <div className="flex items-center justify-center min-h-screen">
@@ -51,24 +148,6 @@ export default function EmployeeDetailPage() {
     );
   }
 
-  const { employee, totalSales, allVouchers, stats, subordinates, subordinatesTotalSales, teamSales, subordinatesVouchers } = data || {};
-
-  const formatCurrency = (amount) => {
-    return new Intl.NumberFormat('en-IN', {
-      style: 'currency',
-      currency: 'INR',
-      minimumFractionDigits: 2
-    }).format(amount || 0);
-  };
-
-  const formatDate = (dateString) => {
-    return new Date(dateString).toLocaleDateString('en-IN', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric'
-    });
-  };
-
   return (
     <div className="container mx-auto p-6 space-y-6">
       {/* Header */}
@@ -88,7 +167,7 @@ export default function EmployeeDetailPage() {
       </div>
 
       {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-6">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Personal Sales</CardTitle>
@@ -98,6 +177,32 @@ export default function EmployeeDetailPage() {
             <div className="text-2xl font-bold text-green-600">{formatCurrency(totalSales)}</div>
             <p className="text-xs text-gray-500 mt-1">
               From {stats?.salesVouchersCount || 0} sales vouchers
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card className="border-red-200">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Credit Notes (Cost)</CardTitle>
+            <Receipt className="h-4 w-4 text-red-600" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-red-600">{formatCurrency(totalCreditNotes)}</div>
+            <p className="text-xs text-gray-500 mt-1">
+              From {stats?.creditNotesCount || 0} credit notes
+            </p>
+          </CardContent>
+        </Card>
+
+        <Card className="bg-gradient-to-br from-emerald-50 to-emerald-100 border-emerald-200">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Net Sales</CardTitle>
+            <TrendingUp className="h-4 w-4 text-emerald-600" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-emerald-600">{formatCurrency(netSales)}</div>
+            <p className="text-xs text-gray-500 mt-1">
+              Sales - Credit Notes
             </p>
           </CardContent>
         </Card>
@@ -119,37 +224,167 @@ export default function EmployeeDetailPage() {
 
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Total Vouchers</CardTitle>
-            <Receipt className="h-4 w-4 text-blue-600" />
+            <CardTitle className="text-sm font-medium">Responsible Parties</CardTitle>
+            <Users className="h-4 w-4 text-orange-600" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">{stats?.totalVouchers || 0}</div>
-            <p className="text-xs text-gray-500 mt-1">All voucher types</p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Average Sale Value</CardTitle>
-            <TrendingUp className="h-4 w-4 text-purple-600" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold text-purple-600">
-              {formatCurrency(stats?.salesVouchersCount > 0 ? totalSales / stats.salesVouchersCount : 0)}
-            </div>
-            <p className="text-xs text-gray-500 mt-1">Per sales voucher</p>
+            <div className="text-2xl font-bold text-orange-600">{stats?.partiesCount || 0}</div>
+            <p className="text-xs text-gray-500 mt-1">Unique customers handled</p>
           </CardContent>
         </Card>
       </div>
 
+      {/* Responsible Parties Card */}
+      {responsibleParties && responsibleParties.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Responsible Parties ({responsibleParties.length})</CardTitle>
+            <CardDescription>All customers this employee is responsible for</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {responsibleParties.map((party, index) => (
+                <button
+                  key={index}
+                  onClick={() => handlePartyClick(party)}
+                  className="flex items-center p-3 bg-gray-50 dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-blue-50 dark:hover:bg-blue-900 hover:border-blue-300 transition-all cursor-pointer group"
+                >
+                  <div className="flex-shrink-0 w-8 h-8 bg-blue-100 dark:bg-blue-900 rounded-full flex items-center justify-center mr-3 group-hover:bg-blue-200">
+                    <span className="text-xs font-semibold text-blue-600 dark:text-blue-300">
+                      {party.charAt(0)}
+                    </span>
+                  </div>
+                  <div className="text-left flex-1">
+                    <p className="text-sm font-medium text-gray-900 dark:text-gray-100 group-hover:text-blue-600">
+                      {party}
+                    </p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">
+                      Click to view transactions
+                    </p>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* All Vouchers Table */}
       <Card>
         <CardHeader>
-          <CardTitle>Personal Vouchers ({allVouchers?.length || 0})</CardTitle>
-          <CardDescription>All vouchers directly associated with this employee</CardDescription>
+          <div className="flex items-center justify-between">
+            <div>
+              <CardTitle>All Vouchers ({filteredVouchers?.length || 0})</CardTitle>
+              <CardDescription>
+                {hasActiveFilters ? `Filtered from ${allVouchers?.length || 0} total vouchers` : 'All voucher transactions'}
+              </CardDescription>
+            </div>
+            <div className="flex gap-2">
+              {hasActiveFilters && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={clearFilters}
+                  className="gap-2"
+                >
+                  <X className="h-4 w-4" />
+                  Clear Filters
+                </Button>
+              )}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowFilters(!showFilters)}
+                className="gap-2"
+              >
+                <Filter className="h-4 w-4" />
+                {showFilters ? 'Hide' : 'Show'} Filters
+              </Button>
+            </div>
+          </div>
+
+          {/* Filter Section */}
+          {showFilters && (
+            <div className="mt-4 p-4 bg-gray-50 dark:bg-gray-800 rounded-lg space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {/* Search */}
+                <div>
+                  <Label htmlFor="search" className="text-sm font-medium">
+                    Search
+                  </Label>
+                  <div className="relative mt-1">
+                    <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
+                    <Input
+                      id="search"
+                      placeholder="Voucher, party, company..."
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      className="pl-10"
+                    />
+                  </div>
+                </div>
+
+                {/* Voucher Type */}
+                <div>
+                  <Label htmlFor="voucherType" className="text-sm font-medium">
+                    Voucher Type
+                  </Label>
+                  <Input
+                    id="voucherType"
+                    placeholder="e.g., Sales, Payment..."
+                    value={voucherTypeFilter}
+                    onChange={(e) => setVoucherTypeFilter(e.target.value)}
+                    className="mt-1"
+                  />
+                </div>
+
+                {/* Party */}
+                <div>
+                  <Label htmlFor="party" className="text-sm font-medium">
+                    Party Name
+                  </Label>
+                  <Input
+                    id="party"
+                    placeholder="Filter by party..."
+                    value={partyFilter}
+                    onChange={(e) => setPartyFilter(e.target.value)}
+                    className="mt-1"
+                  />
+                </div>
+
+                {/* Date From */}
+                <div>
+                  <Label htmlFor="dateFrom" className="text-sm font-medium">
+                    Date From
+                  </Label>
+                  <Input
+                    id="dateFrom"
+                    type="date"
+                    value={dateFrom}
+                    onChange={(e) => setDateFrom(e.target.value)}
+                    className="mt-1"
+                  />
+                </div>
+
+                {/* Date To */}
+                <div>
+                  <Label htmlFor="dateTo" className="text-sm font-medium">
+                    Date To
+                  </Label>
+                  <Input
+                    id="dateTo"
+                    type="date"
+                    value={dateTo}
+                    onChange={(e) => setDateTo(e.target.value)}
+                    className="mt-1"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
         </CardHeader>
         <CardContent>
-          {allVouchers && allVouchers.length > 0 ? (
+          {filteredVouchers && filteredVouchers.length > 0 ? (
             <div className="overflow-x-auto">
               <Table>
                 <TableHeader>
@@ -163,7 +398,7 @@ export default function EmployeeDetailPage() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {allVouchers.map((voucher) => {
+                  {filteredVouchers.map((voucher) => {
                     const vchType = voucher.rawOriginal?.Vch_Type || 'Unknown';
                     const isSales = vchType.toLowerCase().includes('sales');
                     
@@ -178,7 +413,14 @@ export default function EmployeeDetailPage() {
                           </Badge>
                         </TableCell>
                         <TableCell>{formatDate(voucher.date)}</TableCell>
-                        <TableCell>{voucher.rawOriginal?.Party || 'N/A'}</TableCell>
+                        <TableCell>
+                          <button
+                            onClick={() => voucher.rawOriginal?.Party && handlePartyClick(voucher.rawOriginal.Party)}
+                            className="text-blue-600 hover:text-blue-800 hover:underline cursor-pointer"
+                          >
+                            {voucher.rawOriginal?.Party || 'N/A'}
+                          </button>
+                        </TableCell>
                         <TableCell>
                           {voucher.companyId?.name || voucher.companyId?.normalized || 'Unknown'}
                         </TableCell>
@@ -193,7 +435,7 @@ export default function EmployeeDetailPage() {
             </div>
           ) : (
             <div className="text-center py-8 text-gray-500">
-              No vouchers found for this employee
+              {hasActiveFilters ? 'No vouchers match your filters' : 'No vouchers found for this employee'}
             </div>
           )}
         </CardContent>
@@ -320,6 +562,13 @@ export default function EmployeeDetailPage() {
           </Card>
         </>
       )}
+
+      {/* Party Transaction Modal */}
+      <PartyTransactionModal
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        partyName={selectedParty}
+      />
     </div>
   );
 }

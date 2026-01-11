@@ -109,6 +109,17 @@ export function useVoucherItems(id) {
   return useQuery(['voucher-items', id], () => fetcher(`/vouchers/${id}/items`), { enabled: !!id });
 }
 
+// Credit Notes
+export function useCreditNotes(params = {}) {
+  const queryString = Object.keys(params).length > 0 
+    ? '?' + new URLSearchParams(params).toString() 
+    : '';
+  return useQuery(['creditnotes', params], () => fetcher(`/creditnotes${queryString}`));
+}
+export function useCreditNote(id) {
+  return useQuery(['creditnote', id], () => fetcher(`/creditnotes/${id}`), { enabled: !!id });
+}
+
 // Analytics
 export function useAnalyticsEmployeePerformance() {
   return useQuery(['analytics-employee-performance'], () => fetcher('/analytics/employee-performance'));

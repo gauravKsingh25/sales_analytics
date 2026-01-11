@@ -4,6 +4,7 @@ import VoucherParticipant from '../../schemas/voucherparticipant.js';
 import Employee from '../../schemas/employee.js';
 import Company from '../../schemas/company.js';
 import CompanySales from '../../schemas/companysales.js';
+import CreditNote from '../../schemas/creditnote.js';
 
 const router = express.Router();
 
@@ -13,6 +14,7 @@ router.get('/dashboard-all', async (req, res) => {
     const [
       voucherStats,
       salesStats,
+      creditNoteStats,
       employeeCount,
       companyCount,
       dateRange,
@@ -43,6 +45,19 @@ router.get('/dashboard-all', async (req, res) => {
             _id: null,
             totalSales: { $sum: '$totalAmount' },
             salesCount: { $sum: 1 }
+          }
+        }
+      ]),
+      // Credit notes stats (only active, not cancelled)
+      CreditNote.aggregate([
+        {
+          $match: { isCancelled: false }
+        },
+        {
+          $group: {
+            _id: null,
+            totalCreditAmount: { $sum: '$creditAmount' },
+            creditNotesCount: { $sum: 1 }
           }
         }
       ]),
@@ -157,13 +172,21 @@ router.get('/dashboard-all', async (req, res) => {
       ])
     ]);
 
+    // Calculate net revenue
+    const totalSales = salesStats[0]?.totalSales || 0;
+    const totalCreditAmount = creditNoteStats[0]?.totalCreditAmount || 0;
+    const netRevenue = totalSales - totalCreditAmount;
+
     res.json({
       // Dashboard stats
       totalVouchers: voucherStats[0]?.totalVouchers || 0,
       totalAmount: voucherStats[0]?.totalAmount || 0,
       avgVoucherValue: voucherStats[0]?.avgAmount || 0,
-      totalSales: salesStats[0]?.totalSales || 0,
+      totalSales: totalSales,
       salesCount: salesStats[0]?.salesCount || 0,
+      totalCreditAmount: totalCreditAmount,
+      creditNotesCount: creditNoteStats[0]?.creditNotesCount || 0,
+      netRevenue: netRevenue,
       employeeCount,
       companyCount,
       dateRange: dateRange[0] || { minDate: null, maxDate: null },
@@ -209,6 +232,20 @@ router.get('/dashboard-stats', async (req, res) => {
       }
     ]);
 
+    // Get credit notes stats (only active, not cancelled)
+    const creditNoteStats = await CreditNote.aggregate([
+      {
+        $match: { isCancelled: false }
+      },
+      {
+        $group: {
+          _id: null,
+          totalCreditAmount: { $sum: '$creditAmount' },
+          creditNotesCount: { $sum: 1 }
+        }
+      }
+    ]);
+
     // Get employee count
     const employeeCount = await Employee.countDocuments();
 
@@ -243,12 +280,20 @@ router.get('/dashboard-stats', async (req, res) => {
       }
     ]);
 
+    // Calculate net revenue
+    const totalSales = salesStats[0]?.totalSales || 0;
+    const totalCreditAmount = creditNoteStats[0]?.totalCreditAmount || 0;
+    const netRevenue = totalSales - totalCreditAmount;
+
     res.json({
       totalVouchers: voucherStats[0]?.totalVouchers || 0,
       totalAmount: voucherStats[0]?.totalAmount || 0,
       avgVoucherValue: voucherStats[0]?.avgAmount || 0,
-      totalSales: salesStats[0]?.totalSales || 0,
+      totalSales: totalSales,
       salesCount: salesStats[0]?.salesCount || 0,
+      totalCreditAmount: totalCreditAmount,
+      creditNotesCount: creditNoteStats[0]?.creditNotesCount || 0,
+      netRevenue: netRevenue,
       employeeCount,
       companyCount,
       dateRange: dateRange[0] || { minDate: null, maxDate: null },
