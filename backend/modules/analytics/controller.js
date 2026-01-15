@@ -1,5 +1,6 @@
 import express from 'express';
 import Voucher from '../../schemas/voucher.js';
+import VoucherItem from '../../schemas/voucheritem.js';
 import VoucherParticipant from '../../schemas/voucherparticipant.js';
 import Employee from '../../schemas/employee.js';
 import Company from '../../schemas/company.js';
@@ -144,18 +145,24 @@ router.get('/dashboard-all', async (req, res) => {
         { $sort: { totalSales: -1 } },
         { $limit: 10 }
       ]),
-      // Top 10 companies
-      CompanySales.aggregate([
+      // Top 10 companies - Get from Vouchers directly to ensure accurate totals
+      Voucher.aggregate([
         {
-          $sort: { totalSales: -1 }
+          $match: {
+            companyId: { $exists: true, $ne: null }
+          }
         },
         {
-          $limit: 10
+          $group: {
+            _id: '$companyId',
+            totalAmount: { $sum: '$totalAmount' },
+            voucherCount: { $sum: 1 }
+          }
         },
         {
           $lookup: {
             from: 'companies',
-            localField: 'companyId',
+            localField: '_id',
             foreignField: '_id',
             as: 'company'
           }
@@ -165,10 +172,12 @@ router.get('/dashboard-all', async (req, res) => {
           $project: {
             companyName: '$company.name',
             companyNormalized: '$company.normalized',
-            totalAmount: '$totalSales',
+            totalAmount: 1,
             voucherCount: 1
           }
-        }
+        },
+        { $sort: { totalAmount: -1 } },
+        { $limit: 10 }
       ])
     ]);
 
@@ -604,6 +613,590 @@ router.get('/monthly-details', async (req, res) => {
     res.json(responseData);
   } catch (error) {
     console.error('❌ Error in monthly-details:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// ===========================
+// NEW COMPREHENSIVE ANALYTICS
+// ===========================
+
+// Get monthly sales trend (last 12 months)
+router.get('/monthly-sales-trend', async (req, res) => {
+  try {
+    const twelveMonthsAgo = new Date();
+    twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 12);
+
+    const monthlyData = await Voucher.aggregate([
+      {
+        $match: {
+          date: { $gte: twelveMonthsAgo },
+          'rawOriginal.Vch_Type': { $regex: /sales/i }
+        }
+      },
+      {
+        $group: {
+          _id: {
+            year: { $year: '$date' },
+            month: { $month: '$date' }
+          },
+          salesAmount: { $sum: '$totalAmount' },
+          voucherCount: { $sum: 1 }
+        }
+      },
+      { $sort: { '_id.year': 1, '_id.month': 1 } }
+    ]);
+
+    res.json(monthlyData);
+  } catch (error) {
+    console.error('Error in monthly-sales-trend:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// Get voucher type distribution
+router.get('/voucher-type-distribution', async (req, res) => {
+  try {
+    const distribution = await Voucher.aggregate([
+      {
+        $group: {
+          _id: '$rawOriginal.Vch_Type',
+          count: { $sum: 1 },
+          totalAmount: { $sum: '$totalAmount' }
+        }
+      },
+      { $sort: { count: -1 } }
+    ]);
+
+    res.json(distribution);
+  } catch (error) {
+    console.error('Error in voucher-type-distribution:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// Get credit notes trend (monthly)
+router.get('/credit-notes-trend', async (req, res) => {
+  try {
+    const twelveMonthsAgo = new Date();
+    twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 12);
+
+    const creditNotesTrend = await CreditNote.aggregate([
+      {
+        $match: {
+          createdAt: { $gte: twelveMonthsAgo },
+          isCancelled: false
+        }
+      },
+      {
+        $group: {
+          _id: {
+            year: { $year: '$createdAt' },
+            month: { $month: '$createdAt' }
+          },
+          count: { $sum: 1 },
+          totalAmount: { $sum: '$creditAmount' }
+        }
+      },
+      { $sort: { '_id.year': 1, '_id.month': 1 } }
+    ]);
+
+    res.json(creditNotesTrend);
+  } catch (error) {
+    console.error('Error in credit-notes-trend:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// Get top selling items (all time)
+router.get('/top-selling-items', async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 20;
+
+    const topItems = await VoucherItem.aggregate([
+      {
+        $match: {
+          itemType: 'product' // Only actual product items
+        }
+      },
+      {
+        $group: {
+          _id: '$description',
+          totalQty: { $sum: '$qty' },
+          totalAmount: { $sum: '$amount' },
+          orderCount: { $sum: 1 },
+          avgPrice: { $avg: '$unitPrice' }
+        }
+      },
+      { $sort: { totalAmount: -1 } },
+      { $limit: limit },
+      {
+        $project: {
+          itemName: '$_id',
+          totalQty: 1,
+          totalAmount: 1,
+          orderCount: 1,
+          avgPrice: 1
+        }
+      }
+    ]);
+
+    res.json(topItems);
+  } catch (error) {
+    console.error('Error in top-selling-items:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// Get trending items (this month vs last month)
+router.get('/trending-items', async (req, res) => {
+  try {
+    const now = new Date();
+    const thisMonthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
+
+    // Get this month's items
+    const thisMonthVouchers = await Voucher.find({
+      date: { $gte: thisMonthStart }
+    }).select('_id').lean();
+    
+    const thisMonthVoucherIds = thisMonthVouchers.map(v => v._id);
+
+    // Get last month's items
+    const lastMonthVouchers = await Voucher.find({
+      date: { $gte: lastMonthStart, $lte: lastMonthEnd }
+    }).select('_id').lean();
+    
+    const lastMonthVoucherIds = lastMonthVouchers.map(v => v._id);
+
+    // Aggregate this month
+    const thisMonthItems = await VoucherItem.aggregate([
+      { 
+        $match: { 
+          voucherId: { $in: thisMonthVoucherIds },
+          itemType: 'product' // Only actual product items
+        } 
+      },
+      {
+        $group: {
+          _id: '$description',
+          qty: { $sum: '$qty' },
+          amount: { $sum: '$amount' }
+        }
+      }
+    ]);
+
+    // Aggregate last month
+    const lastMonthItems = await VoucherItem.aggregate([
+      { 
+        $match: { 
+          voucherId: { $in: lastMonthVoucherIds },
+          itemType: 'product' // Only actual product items
+        } 
+      },
+      {
+        $group: {
+          _id: '$description',
+          qty: { $sum: '$qty' },
+          amount: { $sum: '$amount' }
+        }
+      }
+    ]);
+
+    // Calculate growth
+    const itemMap = new Map();
+    
+    thisMonthItems.forEach(item => {
+      itemMap.set(item._id, {
+        itemName: item._id,
+        thisMonthQty: item.qty,
+        thisMonthAmount: item.amount,
+        lastMonthQty: 0,
+        lastMonthAmount: 0
+      });
+    });
+
+    lastMonthItems.forEach(item => {
+      if (itemMap.has(item._id)) {
+        itemMap.get(item._id).lastMonthQty = item.qty;
+        itemMap.get(item._id).lastMonthAmount = item.amount;
+      } else {
+        itemMap.set(item._id, {
+          itemName: item._id,
+          thisMonthQty: 0,
+          thisMonthAmount: 0,
+          lastMonthQty: item.qty,
+          lastMonthAmount: item.amount
+        });
+      }
+    });
+
+    // Calculate growth percentage
+    const trending = Array.from(itemMap.values()).map(item => {
+      const qtyGrowth = item.lastMonthQty > 0
+        ? ((item.thisMonthQty - item.lastMonthQty) / item.lastMonthQty) * 100
+        : item.thisMonthQty > 0 ? 100 : 0;
+      
+      const amountGrowth = item.lastMonthAmount > 0
+        ? ((item.thisMonthAmount - item.lastMonthAmount) / item.lastMonthAmount) * 100
+        : item.thisMonthAmount > 0 ? 100 : 0;
+
+      return {
+        ...item,
+        qtyGrowth,
+        amountGrowth
+      };
+    })
+    .filter(item => item.thisMonthAmount > 0) // Only items sold this month
+    .sort((a, b) => b.amountGrowth - a.amountGrowth)
+    .slice(0, 20);
+
+    res.json(trending);
+  } catch (error) {
+    console.error('Error in trending-items:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// Get current month overview
+router.get('/current-month-overview', async (req, res) => {
+  try {
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
+
+    const [thisMonth, lastMonth, thisMonthCreditNotes, lastMonthCreditNotes] = await Promise.all([
+      // This month vouchers
+      Voucher.aggregate([
+        { $match: { date: { $gte: monthStart } } },
+        {
+          $group: {
+            _id: null,
+            totalAmount: { $sum: '$totalAmount' },
+            voucherCount: { $sum: 1 },
+            salesAmount: {
+              $sum: {
+                $cond: [
+                  { $regexMatch: { input: '$rawOriginal.Vch_Type', regex: /sales/i } },
+                  '$totalAmount',
+                  0
+                ]
+              }
+            },
+            salesCount: {
+              $sum: {
+                $cond: [
+                  { $regexMatch: { input: '$rawOriginal.Vch_Type', regex: /sales/i } },
+                  1,
+                  0
+                ]
+              }
+            }
+          }
+        }
+      ]),
+      // Last month vouchers
+      Voucher.aggregate([
+        { $match: { date: { $gte: lastMonthStart, $lte: lastMonthEnd } } },
+        {
+          $group: {
+            _id: null,
+            totalAmount: { $sum: '$totalAmount' },
+            voucherCount: { $sum: 1 },
+            salesAmount: {
+              $sum: {
+                $cond: [
+                  { $regexMatch: { input: '$rawOriginal.Vch_Type', regex: /sales/i } },
+                  '$totalAmount',
+                  0
+                ]
+              }
+            }
+          }
+        }
+      ]),
+      // This month credit notes
+      CreditNote.aggregate([
+        {
+          $match: {
+            createdAt: { $gte: monthStart },
+            isCancelled: false
+          }
+        },
+        {
+          $group: {
+            _id: null,
+            totalAmount: { $sum: '$creditAmount' },
+            count: { $sum: 1 }
+          }
+        }
+      ]),
+      // Last month credit notes
+      CreditNote.aggregate([
+        {
+          $match: {
+            createdAt: { $gte: lastMonthStart, $lte: lastMonthEnd },
+            isCancelled: false
+          }
+        },
+        {
+          $group: {
+            _id: null,
+            totalAmount: { $sum: '$creditAmount' },
+            count: { $sum: 1 }
+          }
+        }
+      ])
+    ]);
+
+    const thisMonthData = thisMonth[0] || { totalAmount: 0, voucherCount: 0, salesAmount: 0, salesCount: 0 };
+    const lastMonthData = lastMonth[0] || { totalAmount: 0, voucherCount: 0, salesAmount: 0 };
+    const thisMonthCN = thisMonthCreditNotes[0] || { totalAmount: 0, count: 0 };
+    const lastMonthCN = lastMonthCreditNotes[0] || { totalAmount: 0, count: 0 };
+
+    // Calculate growth percentages
+    const salesGrowth = lastMonthData.salesAmount > 0
+      ? ((thisMonthData.salesAmount - lastMonthData.salesAmount) / lastMonthData.salesAmount) * 100
+      : thisMonthData.salesAmount > 0 ? 100 : 0;
+
+    const voucherGrowth = lastMonthData.voucherCount > 0
+      ? ((thisMonthData.voucherCount - lastMonthData.voucherCount) / lastMonthData.voucherCount) * 100
+      : thisMonthData.voucherCount > 0 ? 100 : 0;
+
+    const creditNoteGrowth = lastMonthCN.totalAmount > 0
+      ? ((thisMonthCN.totalAmount - lastMonthCN.totalAmount) / lastMonthCN.totalAmount) * 100
+      : thisMonthCN.totalAmount > 0 ? 100 : 0;
+
+    // Get items sold this month
+    const thisMonthVouchers = await Voucher.find({
+      date: { $gte: monthStart }
+    }).select('_id').lean();
+    
+    const voucherIds = thisMonthVouchers.map(v => v._id);
+
+    const [itemsStats, uniqueCompanies, uniqueEmployees] = await Promise.all([
+      VoucherItem.aggregate([
+        { $match: { voucherId: { $in: voucherIds } } },
+        {
+          $group: {
+            _id: null,
+            totalItems: { $sum: 1 },
+            totalQty: { $sum: '$qty' },
+            uniqueProducts: { $addToSet: '$description' }
+          }
+        }
+      ]),
+      Voucher.distinct('companyId', { date: { $gte: monthStart } }),
+      VoucherParticipant.distinct('employeeId', { voucherId: { $in: voucherIds } })
+    ]);
+
+    const itemData = itemsStats[0] || { totalItems: 0, totalQty: 0, uniqueProducts: [] };
+
+    res.json({
+      month: now.getMonth() + 1,
+      year: now.getFullYear(),
+      sales: {
+        amount: thisMonthData.salesAmount,
+        count: thisMonthData.salesCount,
+        growth: salesGrowth,
+        avgDealSize: thisMonthData.salesCount > 0 ? thisMonthData.salesAmount / thisMonthData.salesCount : 0
+      },
+      vouchers: {
+        count: thisMonthData.voucherCount,
+        growth: voucherGrowth
+      },
+      creditNotes: {
+        amount: thisMonthCN.totalAmount,
+        count: thisMonthCN.count,
+        growth: creditNoteGrowth
+      },
+      items: {
+        totalSold: itemData.totalItems,
+        totalQuantity: itemData.totalQty,
+        uniqueProducts: itemData.uniqueProducts.length
+      },
+      activity: {
+        activeCompanies: uniqueCompanies.length,
+        activeEmployees: uniqueEmployees.length
+      }
+    });
+  } catch (error) {
+    console.error('Error in current-month-overview:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// Get all-time overview
+router.get('/all-time-overview', async (req, res) => {
+  try {
+    const [voucherStats, itemStats, creditNoteStats] = await Promise.all([
+      Voucher.aggregate([
+        {
+          $group: {
+            _id: null,
+            totalVouchers: { $sum: 1 },
+            totalAmount: { $sum: '$totalAmount' },
+            salesAmount: {
+              $sum: {
+                $cond: [
+                  { $regexMatch: { input: '$rawOriginal.Vch_Type', regex: /sales/i } },
+                  '$totalAmount',
+                  0
+                ]
+              }
+            },
+            salesCount: {
+              $sum: {
+                $cond: [
+                  { $regexMatch: { input: '$rawOriginal.Vch_Type', regex: /sales/i } },
+                  1,
+                  0
+                ]
+              }
+            }
+          }
+        }
+      ]),
+      VoucherItem.aggregate([
+        {
+          $group: {
+            _id: null,
+            totalItems: { $sum: 1 },
+            totalQty: { $sum: '$qty' },
+            totalRevenue: { $sum: '$amount' },
+            uniqueProducts: { $addToSet: '$description' }
+          }
+        }
+      ]),
+      CreditNote.aggregate([
+        {
+          $match: { isCancelled: false }
+        },
+        {
+          $group: {
+            _id: null,
+            totalAmount: { $sum: '$creditAmount' },
+            count: { $sum: 1 }
+          }
+        }
+      ])
+    ]);
+
+    const voucherData = voucherStats[0] || { totalVouchers: 0, totalAmount: 0, salesAmount: 0, salesCount: 0 };
+    const itemData = itemStats[0] || { totalItems: 0, totalQty: 0, totalRevenue: 0, uniqueProducts: [] };
+    const creditNoteData = creditNoteStats[0] || { totalAmount: 0, count: 0 };
+
+    const [totalCompanies, totalEmployees] = await Promise.all([
+      Company.countDocuments(),
+      Employee.countDocuments()
+    ]);
+
+    res.json({
+      vouchers: {
+        total: voucherData.totalVouchers,
+        totalAmount: voucherData.totalAmount,
+        salesCount: voucherData.salesCount,
+        salesAmount: voucherData.salesAmount,
+        avgDealSize: voucherData.salesCount > 0 ? voucherData.salesAmount / voucherData.salesCount : 0
+      },
+      items: {
+        totalSold: itemData.totalItems,
+        totalQuantity: itemData.totalQty,
+        totalRevenue: itemData.totalRevenue,
+        uniqueProducts: itemData.uniqueProducts.length,
+        avgItemPrice: itemData.totalItems > 0 ? itemData.totalRevenue / itemData.totalItems : 0
+      },
+      creditNotes: {
+        total: creditNoteData.count,
+        totalAmount: creditNoteData.totalAmount
+      },
+      entities: {
+        companies: totalCompanies,
+        employees: totalEmployees
+      }
+    });
+  } catch (error) {
+    console.error('Error in all-time-overview:', error);
+    res.status(500).json({ message: 'Server error', error: error.message });
+  }
+});
+
+// Get employee-item sales ranking (who sold which item more)
+router.get('/employee-item-ranking', async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit) || 50;
+
+    // Get all vouchers with their items (only actual products)
+    const employeeItemSales = await VoucherItem.aggregate([
+      {
+        $match: {
+          itemType: 'product' // Only actual product items
+        }
+      },
+      {
+        $lookup: {
+          from: 'vouchers',
+          localField: 'voucherId',
+          foreignField: '_id',
+          as: 'voucher'
+        }
+      },
+      { $unwind: '$voucher' },
+      {
+        $lookup: {
+          from: 'voucherparticipants',
+          let: { voucherId: '$voucherId' },
+          pipeline: [
+            { $match: { $expr: { $eq: ['$voucherId', '$$voucherId'] } } },
+            { $match: { role: 'Employee' } }
+          ],
+          as: 'participants'
+        }
+      },
+      { $unwind: { path: '$participants', preserveNullAndEmptyArrays: true } },
+      {
+        $lookup: {
+          from: 'employees',
+          localField: 'participants.employeeId',
+          foreignField: '_id',
+          as: 'employee'
+        }
+      },
+      { $unwind: { path: '$employee', preserveNullAndEmptyArrays: true } },
+      {
+        $group: {
+          _id: {
+            employeeId: '$employee._id',
+            employeeName: '$employee.name',
+            employeeCode: '$employee.code',
+            itemName: '$description'
+          },
+          totalQty: { $sum: '$qty' },
+          totalAmount: { $sum: '$amount' },
+          orderCount: { $sum: 1 }
+        }
+      },
+      {
+        $project: {
+          _id: 0,
+          employeeId: '$_id.employeeId',
+          employeeName: '$_id.employeeName',
+          employeeCode: '$_id.employeeCode',
+          itemName: '$_id.itemName',
+          totalQty: 1,
+          totalAmount: 1,
+          orderCount: 1
+        }
+      },
+      { $sort: { totalAmount: -1 } },
+      { $limit: limit }
+    ]);
+
+    res.json(employeeItemSales);
+  } catch (error) {
+    console.error('Error in employee-item-ranking:', error);
     res.status(500).json({ message: 'Server error', error: error.message });
   }
 });

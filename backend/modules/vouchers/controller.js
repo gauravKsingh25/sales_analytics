@@ -261,3 +261,16 @@ export const getVoucherStats = async (req, res) => {
     res.status(500).json({ message: 'Failed to fetch stats', error: error.message });
   }
 };
+
+export const getVoucherItems = async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Fetch items for this voucher
+    const items = await VoucherItem.find({ voucherId: id }).lean();
+    
+    res.json({ items });
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to fetch voucher items', error: error.message });
+  }
+};

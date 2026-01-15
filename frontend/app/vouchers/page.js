@@ -36,6 +36,9 @@ function VoucherDetails({ voucherId, employees, voucher, onPartyClick }) {
   const accountEntries = details.filter(d => d.Account);
   const staffEntries = details.filter(d => d.Staff && !d.Account);
 
+  // Get actual product items from VoucherItem collection
+  const productItems = data?.items?.filter(item => item.itemType === 'product') || [];
+
   return (
     <div className="p-4 space-y-4">
       {/* Basic Voucher Info */}
@@ -62,6 +65,44 @@ function VoucherDetails({ voucherId, employees, voucher, onPartyClick }) {
           <p className="font-medium">₹{rawOriginal?.Credit_Amount?.toLocaleString('en-IN') || '0'}</p>
         </div>
       </div>
+
+      {/* Product Items Section */}
+      {productItems.length > 0 && (
+        <div>
+          <h4 className="font-semibold mb-3 text-sm flex items-center gap-2">
+            <FileText className="h-4 w-4" />
+            Items Sold:
+          </h4>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Product Description</TableHead>
+                <TableHead className="text-right">Qty</TableHead>
+                <TableHead className="text-right">Unit Price</TableHead>
+                <TableHead className="text-right">Amount</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {productItems.map((item, idx) => (
+                <TableRow key={idx}>
+                  <TableCell className="font-medium">{item.description}</TableCell>
+                  <TableCell className="text-right">{item.qty?.toFixed(2) || '0'}</TableCell>
+                  <TableCell className="text-right">₹{item.unitPrice?.toLocaleString('en-IN') || '0'}</TableCell>
+                  <TableCell className="text-right font-semibold text-green-600">
+                    ₹{item.amount?.toLocaleString('en-IN') || '0'}
+                  </TableCell>
+                </TableRow>
+              ))}
+              <TableRow className="bg-muted/50 font-semibold">
+                <TableCell colSpan={3} className="text-right">Total Items:</TableCell>
+                <TableCell className="text-right">
+                  ₹{productItems.reduce((sum, item) => sum + (item.amount || 0), 0).toLocaleString('en-IN')}
+                </TableCell>
+              </TableRow>
+            </TableBody>
+          </Table>
+        </div>
+      )}
 
       {/* Account Ledger Entries */}
       {accountEntries.length > 0 && (
