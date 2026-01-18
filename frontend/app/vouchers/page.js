@@ -252,9 +252,11 @@ function CreditNoteDetails({ creditNote, onPartyClick }) {
             <TableBody>
               {creditNote.details.map((item, idx) => (
                 <TableRow key={idx}>
-                  <TableCell className="font-medium">{item.description || 'N/A'}</TableCell>
-                  <TableCell className="text-right">{item.quantity || '-'}</TableCell>
-                  <TableCell className="text-right">{item.rate?.toLocaleString('en-IN') || '-'}</TableCell>
+                  <TableCell className="font-medium">
+                    {item.staff || item.account || 'N/A'}
+                  </TableCell>
+                  <TableCell className="text-right">-</TableCell>
+                  <TableCell className="text-right">-</TableCell>
                   <TableCell className="text-right font-medium">
                     {item.amount?.toLocaleString('en-IN') || '0'}
                   </TableCell>
